@@ -5,7 +5,7 @@ Author: Christian / Prigma Software
 License: MIT
 
 A lightweight, multi-repository GitHub release monitor bot for Telegram.
-- Monitors public and private GitHub repositories for new releases/tags.
+- Monitors public and private GitHub repositories for new releases/tags/commits.
 - Real-time interactive Telegram commands (/list, /add, /disable, /enable, /remove, /check).
 - Ultra low-resource footprint (~15MB RAM, 0.0% CPU).
 - Zero external Python dependencies (Standard Library only).
@@ -115,36 +115,59 @@ def build_github_headers(github_token=""):
 
 
 def fetch_github_release(repo, github_token=""):
-    """Fetch latest release or tag from GitHub API."""
+    """Fetch latest release, tag or commit from GitHub API."""
     headers = build_github_headers(github_token)
+    
+    # 1. Try releases
     url = f"https://api.github.com/repos/{repo}/releases/latest"
     req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=12) as response:
             if response.status == 200:
                 return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        if e.code in [404, 403]:
-            # Fallback to tags endpoint
-            tags_url = f"https://api.github.com/repos/{repo}/tags"
-            try:
-                req_tags = urllib.request.Request(tags_url, headers=headers)
-                with urllib.request.urlopen(req_tags, timeout=12) as res_tags:
-                    tags = json.loads(res_tags.read().decode("utf-8"))
-                    if tags and len(tags) > 0:
-                        latest_tag = tags[0]
-                        return {
-                            "tag_name": latest_tag["name"],
-                            "name": latest_tag["name"],
-                            "html_url": f"https://github.com/{repo}/releases/tag/{latest_tag['name']}",
-                            "published_at": "",
-                            "body": "Nuevo tag / release publicado.",
-                        }
-            except Exception:
-                pass
-        logging.warning(f"HTTP error {e.code} fetching {repo}")
+    except Exception:
+        pass
+
+    # 2. Fallback to tags
+    tags_url = f"https://api.github.com/repos/{repo}/tags"
+    try:
+        req_tags = urllib.request.Request(tags_url, headers=headers)
+        with urllib.request.urlopen(req_tags, timeout=12) as res_tags:
+            tags = json.loads(res_tags.read().decode("utf-8"))
+            if tags and len(tags) > 0:
+                latest_tag = tags[0]
+                return {
+                    "tag_name": latest_tag["name"],
+                    "name": latest_tag["name"],
+                    "html_url": f"https://github.com/{repo}/releases/tag/{latest_tag['name']}",
+                    "published_at": "",
+                    "body": "Nuevo tag publicado en el repositorio.",
+                }
+    except Exception:
+        pass
+
+    # 3. Fallback to commits (for repos without releases/tags)
+    commits_url = f"https://api.github.com/repos/{repo}/commits"
+    try:
+        req_commits = urllib.request.Request(commits_url, headers=headers)
+        with urllib.request.urlopen(req_commits, timeout=12) as res_commits:
+            commits = json.loads(res_commits.read().decode("utf-8"))
+            if commits and len(commits) > 0:
+                c = commits[0]
+                sha_short = c["sha"][:7]
+                msg = c.get("commit", {}).get("message", "Commit inicial")
+                author = c.get("commit", {}).get("author", {}).get("name", "")
+                date_str = c.get("commit", {}).get("author", {}).get("date", "")[:10]
+                return {
+                    "tag_name": f"commit-{sha_short}",
+                    "name": f"Commit {sha_short}",
+                    "html_url": c.get("html_url", f"https://github.com/{repo}"),
+                    "published_at": date_str,
+                    "body": f"<b>Autor:</b> {clean_html(author)}\n<b>Mensaje:</b> {clean_html(msg)}",
+                }
     except Exception as e:
-        logging.error(f"Error fetching {repo}: {e}")
+        logging.warning(f"Could not fetch commits for {repo}: {e}")
+
     return None
 
 
@@ -180,20 +203,20 @@ def format_release_alert(repo, release, display_name=None):
     published_at = release.get("published_at", "")[:10]
     raw_body = release.get("body", "Sin notas de versión disponibles.")
 
-    body_clean = clean_html(raw_body)
+    body_clean = clean_html(raw_body) if not raw_body.startswith("<b>") else raw_body
     if len(body_clean) > 2800:
         body_clean = body_clean[:2800] + "\n\n<i>... [Ver changelog completo en GitHub]</i>"
 
     repo_title = display_name if display_name else repo
 
     return (
-        f"🚀 <b>¡NUEVA VERSIÓN DETECTADA!</b>\n\n"
+        f"🚀 <b>¡NUEVA ACTUALIZACIÓN DETECTADA!</b>\n\n"
         f"📦 <b>Repositorio:</b> <code>{clean_html(repo)}</code> ({clean_html(repo_title)})\n"
         f"🏷️ <b>Versión / Tag:</b> <code>{clean_html(tag)}</code>\n"
         f"📅 <b>Fecha:</b> {published_at if published_at else 'Reciente'}\n"
         f"🔗 <b>Enlace oficial:</b> <a href='{url}'>Ver en GitHub</a>\n\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📋 <b>Novedades y Cambios:</b>\n\n"
+        f"📋 <b>Detalles:</b>\n\n"
         f"{body_clean}\n\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"🛡️ <i>Telegram Repo Watcher Bot</i>"
@@ -308,7 +331,7 @@ def handle_telegram_command(bot_token, chat_id, text, github_token=""):
             chat_id,
             f"✅ <b>Repositorio agregado con éxito!</b>\n\n"
             f"📦 <code>{repo}</code>\n"
-            f"🏷️ Última versión detectada: <code>{latest_tag}</code>\n"
+            f"🏷️ Versión / Commit actual: <code>{latest_tag}</code>\n"
             f"🔔 Notificaciones: <b>Activadas</b>",
         )
 
@@ -322,7 +345,7 @@ def handle_telegram_command(bot_token, chat_id, text, github_token=""):
             save_watched_repos(repos)
             send_telegram(bot_token, chat_id, f"⏸️ <b>Notificaciones pausadas</b> para <code>{repo}</code>.")
         else:
-            send_telegram(bot_token, chat_id, f"❌ El repositorio <code>{repo}</code> no está en la lista. Usa <code>/list</code>.")
+            send_telegram(bot_token, chat_id, f"❌ El repositorio <code>{repo}</code> no está en la lista. Usa <code>/list</code> para ver tus repos.")
 
     elif cmd in ["/enable", "/resume"]:
         if not args:
