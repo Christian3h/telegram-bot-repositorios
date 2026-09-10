@@ -1,0 +1,16 @@
+# Environment & Secrets
+.env
+.env.local
+
+# Data & Runtime state (never track private repos/history)
+watched_repos.json
+data/
+*.txt
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+env/

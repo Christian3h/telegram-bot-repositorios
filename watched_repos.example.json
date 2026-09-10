@@ -1,0 +1,12 @@
+{
+  "chatwoot/chatwoot": {
+    "name": "Chatwoot",
+    "enabled": true,
+    "last_release": ""
+  },
+  "n8n-io/n8n": {
+    "name": "n8n Workflow Automation",
+    "enabled": true,
+    "last_release": ""
+  }
+}

@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  telegram-bot:
+    build: .
+    container_name: telegram-repo-watcher
+    restart: always
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    working_dir: /app
