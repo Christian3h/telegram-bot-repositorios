@@ -228,6 +228,7 @@ def check_all_repos(bot_token, chat_id, github_token="", notify_if_current=False
     repos = load_watched_repos()
     updates_found = 0
     checked_count = 0
+    target_chats = [c.strip() for c in str(chat_id).split(",") if c.strip()]
 
     for repo, data in repos.items():
         if not data.get("enabled", True):
@@ -246,18 +247,20 @@ def check_all_repos(bot_token, chat_id, github_token="", notify_if_current=False
             updates_found += 1
             logging.info(f"New release found for {repo}: {latest_tag} (was {last_known})")
             msg = format_release_alert(repo, release, data.get("name"))
-            send_telegram(bot_token, chat_id, msg)
+            for cid in target_chats:
+                send_telegram(bot_token, cid, msg)
             data["last_release"] = latest_tag
             save_watched_repos(repos)
         else:
             logging.info(f"{repo} is up to date ({latest_tag}).")
 
     if notify_if_current and updates_found == 0:
-        send_telegram(
-            bot_token,
-            chat_id,
-            f"✅ <b>Todos los repositorios ({checked_count}) están al día.</b> No hay nuevas versiones por el momento.",
-        )
+        for cid in target_chats:
+            send_telegram(
+                bot_token,
+                cid,
+                f"✅ <b>Todos los repositorios ({checked_count}) están al día.</b> No hay nuevas versiones por el momento.",
+            )
 
 
 def handle_telegram_command(bot_token, chat_id, text, github_token=""):
@@ -265,6 +268,8 @@ def handle_telegram_command(bot_token, chat_id, text, github_token=""):
     text = text.strip()
     parts = text.split()
     cmd = parts[0].lower() if parts else ""
+    if "@" in cmd:
+        cmd = cmd.split("@")[0]
     args = parts[1:] if len(parts) > 1 else []
     repos = load_watched_repos()
 
@@ -410,15 +415,17 @@ def run_daemon():
 
             # 2. Process incoming Telegram messages
             updates = poll_telegram_updates(bot_token, chat_id, last_update_id)
+            target_chats = [c.strip() for c in str(chat_id).split(",") if c.strip()]
             for upd in updates:
                 last_update_id = upd["update_id"]
                 msg = upd.get("message", {})
                 from_id = str(msg.get("from", {}).get("id", ""))
+                chat_id_msg = str(msg.get("chat", {}).get("id", from_id))
                 text = msg.get("text", "")
 
-                if text and (from_id == str(chat_id) or str(chat_id) == ""):
-                    logging.info(f"Received command: {text} from {from_id}")
-                    handle_telegram_command(bot_token, from_id, text, github_token)
+                if text and (not target_chats or chat_id_msg in target_chats or from_id in target_chats):
+                    logging.info(f"Received command: {text} from {from_id} in {chat_id_msg}")
+                    handle_telegram_command(bot_token, chat_id_msg, text, github_token)
 
         except KeyboardInterrupt:
             logging.info("Stopping bot daemon...")
