@@ -170,12 +170,15 @@ class PrigmaTasksWatcher:
         return {
             "inline_keyboard": [
                 [
-                    {"text": "▶️ En Progreso", "callback_data": f"ts:{task_id}:in_progress"},
+                    {"text": "⚡ En Progreso", "callback_data": f"ts:{task_id}:in_progress"},
                     {"text": "🔍 En Revisión", "callback_data": f"ts:{task_id}:in_review"},
                 ],
                 [
                     {"text": "✅ Completar", "callback_data": f"ts:{task_id}:completed"},
-                    {"text": "⚠️ Bloqueada", "callback_data": f"ts:{task_id}:blocked"},
+                    {"text": "🚫 Bloqueada", "callback_data": f"ts:{task_id}:blocked"},
+                ],
+                [
+                    {"text": "🌐 Ver en Plataforma PRIGMA", "url": "https://prigma.net/dashboard/admin/tasks"},
                 ],
             ]
         }
@@ -206,7 +209,10 @@ class PrigmaTasksWatcher:
         )
         if due_date:
             msg += f"<b>Fecha límite:</b> {due_date}\n"
-        msg += f"\n👋 Hola <b>{assignee}</b>, ¿cómo va el avance de esta actividad? Actualiza su estado pulsando un botón:"
+        msg += (
+            f"\n👋 Hola <b>{assignee}</b>, ¿cómo va el avance de esta actividad?\n"
+            f"Actualiza su estado pulsando un botón abajo o ingresa a la plataforma web para gestionar detalles."
+        )
 
         return msg
 
@@ -291,11 +297,36 @@ class PrigmaTasksWatcher:
             task_title = task_info.get("title", "Tarea")
             task_code = task_info.get("task_code", "")
 
-            self.answer_callback_query(cq_id, text=f"✅ Estado actualizado a: {new_status}")
+            status_labels = {
+                "in_progress": "⚡ En Progreso",
+                "in_review": "🔍 En Revisión",
+                "completed": "✅ Completada",
+                "blocked": "🚫 Bloqueada",
+            }
+            label = status_labels.get(new_status, new_status)
+
+            if new_status == "completed":
+                if task_id in self.reminders_state:
+                    del self.reminders_state[task_id]
+                    self._save_state()
+                extra_text = "\n🎉 <b>¡Felicitaciones!</b> Tarea finalizada. Ya no recibirás más recordatorios de ella."
+            elif new_status == "blocked":
+                extra_text = "\n⚠️ <b>Tarea marcada como bloqueada.</b> Permanecerá en tu lista para que puedas desbloquearla cuando se resuelva el impedimento."
+            else:
+                extra_text = ""
+
+            self.answer_callback_query(cq_id, text=f"✅ Estado: {label}")
             if chat_id:
+                confirm_kb = {
+                    "inline_keyboard": [
+                        [{"text": "🌐 Ver en Plataforma PRIGMA", "url": "https://prigma.net/dashboard/admin/tasks"}],
+                    ]
+                }
                 self.send_telegram_message(
                     chat_id,
-                    f"✅ <b>[{task_code}] {task_title}</b> actualizada correctamente a: <b>{new_status}</b> por {user_name}.",
+                    f"📌 <b>[{task_code}] {task_title}</b> actualizada a: <b>{label}</b> por {user_name}.{extra_text}\n\n"
+                    f"👉 <a href='https://prigma.net/dashboard/admin/tasks'>Abrir Plataforma PRIGMA</a>",
+                    reply_markup=confirm_kb,
                 )
         else:
             err = res.get("error", "Error al actualizar")

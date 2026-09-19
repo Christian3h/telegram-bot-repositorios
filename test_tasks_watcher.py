@@ -35,11 +35,12 @@ class TestPrigmaTasksWatcher(unittest.TestCase):
         kb = self.watcher.generate_task_keyboard("task-uuid-123")
         self.assertIn("inline_keyboard", kb)
         buttons = kb["inline_keyboard"]
-        self.assertEqual(len(buttons), 2)
+        self.assertEqual(len(buttons), 3)
         self.assertEqual(buttons[0][0]["callback_data"], "ts:task-uuid-123:in_progress")
         self.assertEqual(buttons[0][1]["callback_data"], "ts:task-uuid-123:in_review")
         self.assertEqual(buttons[1][0]["callback_data"], "ts:task-uuid-123:completed")
         self.assertEqual(buttons[1][1]["callback_data"], "ts:task-uuid-123:blocked")
+        self.assertEqual(buttons[2][0]["url"], "https://prigma.net/dashboard/admin/tasks")
 
     def test_format_task_message(self):
         sample_task = {
