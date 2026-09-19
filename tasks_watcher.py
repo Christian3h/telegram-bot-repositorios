@@ -115,7 +115,7 @@ class PrigmaTasksWatcher:
 
         res = self._make_api_request(path, method="GET")
         if res.get("success"):
-            return res.get("tasks", [])
+            return res.get("data") or res.get("tasks") or []
         return []
 
     def update_task_status(self, task_id: str, new_status: str, author_name: str = "Telegram User", note: str = None) -> dict:
@@ -285,7 +285,7 @@ class PrigmaTasksWatcher:
         )
 
         if res.get("success"):
-            task_info = res.get("task", {})
+            task_info = res.get("data") or res.get("task") or {}
             task_title = task_info.get("title", "Tarea")
             task_code = task_info.get("task_code", "")
 

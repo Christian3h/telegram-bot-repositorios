@@ -56,5 +56,24 @@ class TestPrigmaTasksWatcher(unittest.TestCase):
         self.assertIn("HIGH", msg)
         self.assertIn("Daniel", msg)
 
+    def test_fetch_pending_tasks_parsing(self):
+        # Test that fetch_pending_tasks accepts both "data" and "tasks" response keys
+        self.watcher._make_api_request = lambda path, method="GET", payload=None: {
+            "success": True,
+            "data": [{"id": "t1", "title": "Test Task", "status": "pending"}]
+        }
+        tasks = self.watcher.fetch_pending_tasks()
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["id"], "t1")
+
+        # Fallback to "tasks"
+        self.watcher._make_api_request = lambda path, method="GET", payload=None: {
+            "success": True,
+            "tasks": [{"id": "t2", "title": "Legacy Key", "status": "in_progress"}]
+        }
+        tasks2 = self.watcher.fetch_pending_tasks()
+        self.assertEqual(len(tasks2), 1)
+        self.assertEqual(tasks2[0]["id"], "t2")
+
 if __name__ == "__main__":
     unittest.main()
