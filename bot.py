@@ -266,7 +266,7 @@ def check_all_repos(bot_token, chat_id, github_token="", notify_if_current=False
             )
 
 
-def handle_telegram_command(bot_token, chat_id, text, github_token="", tasks_watcher: PrigmaTasksWatcher = None):
+def handle_telegram_command(bot_token, chat_id, text, github_token="", tasks_watcher: PrigmaTasksWatcher = None, from_id: str = ""):
     """Handle interactive user commands in Telegram."""
     text = text.strip()
     parts = text.split()
@@ -299,10 +299,11 @@ def handle_telegram_command(bot_token, chat_id, text, github_token="", tasks_wat
             return
 
         tasks = tasks_watcher.fetch_pending_tasks()
-        # Filtrar tareas del usuario por su chat_id
+        # Filtrar tareas del usuario por su from_id o chat_id
+        target_user_id = str(from_id or chat_id)
         user_tasks = [
             t for t in tasks
-            if str((t.get("assignee_contact") or {}).get("telegram_chat_id")) == str(chat_id)
+            if str((t.get("assignee_contact") or {}).get("telegram_chat_id")) == target_user_id
         ]
 
         if not user_tasks:
@@ -502,9 +503,12 @@ def run_daemon():
                 chat_id_msg = str(msg.get("chat", {}).get("id", from_id))
                 text = msg.get("text", "")
 
-                if text and (not target_chats or chat_id_msg in target_chats or from_id in target_chats):
+                chat_type = msg.get("chat", {}).get("type", "")
+                is_authorized = not target_chats or chat_id_msg in target_chats or from_id in target_chats or chat_type == "private"
+
+                if text and is_authorized:
                     logging.info(f"Received command: {text} from {from_id} in {chat_id_msg}")
-                    handle_telegram_command(bot_token, chat_id_msg, text, github_token, tasks_watcher=tasks_watcher)
+                    handle_telegram_command(bot_token, chat_id_msg, text, github_token, tasks_watcher=tasks_watcher, from_id=from_id)
 
         except KeyboardInterrupt:
             logging.info("Stopping bot daemon...")
