@@ -277,12 +277,14 @@ class PrigmaTasksWatcher:
             return True
 
         _, task_id, new_status = parts
+        logging.info(f"[tasks_watcher] Processing callback from {user_name}: task {task_id} -> {new_status}")
         res = self.update_task_status(
             task_id=task_id,
             new_status=new_status,
             author_name=user_name,
             note=f"Estado cambiado a '{new_status}' por {user_name} vía Telegram",
         )
+        logging.info(f"[tasks_watcher] update_task_status response: {res}")
 
         if res.get("success"):
             task_info = res.get("data") or res.get("task") or {}

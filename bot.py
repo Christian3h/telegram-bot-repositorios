@@ -441,15 +441,26 @@ def handle_telegram_command(bot_token, chat_id, text, github_token="", tasks_wat
 
 def poll_telegram_updates(bot_token, chat_id, last_update_id):
     """Long-polling for Telegram updates."""
-    url = f"https://api.telegram.org/bot{bot_token}/getUpdates?timeout=15&offset={last_update_id + 1}"
+    url = f"https://api.telegram.org/bot{bot_token}/getUpdates"
+    payload = {
+        "timeout": 15,
+        "offset": last_update_id + 1,
+        "allowed_updates": ["message", "callback_query", "chat_member", "my_chat_member"],
+    }
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Telegram-Repo-Watcher"})
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={"Content-Type": "application/json", "User-Agent": "Telegram-Repo-Watcher"},
+            method="POST",
+        )
         with urllib.request.urlopen(req, timeout=20) as response:
             res = json.loads(response.read().decode("utf-8"))
             if res.get("ok"):
                 return res.get("result", [])
-    except Exception:
-        pass
+    except Exception as e:
+        logging.debug(f"Error polling Telegram updates: {e}")
     return []
 
 
@@ -494,6 +505,7 @@ def run_daemon():
 
                 # Handle callback query (interactive buttons)
                 if "callback_query" in upd:
+                    logging.info(f"Processing callback_query: {upd['callback_query'].get('data')}")
                     tasks_watcher.handle_callback_query(upd["callback_query"])
                     continue
 
