@@ -19,6 +19,7 @@ import logging
 import urllib.request
 import urllib.parse
 from pathlib import Path
+from tasks_watcher import PrigmaTasksWatcher
 
 # Setup paths
 BASE_DIR = Path(__file__).resolve().parent
@@ -56,6 +57,8 @@ def get_config():
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
     github_token = os.environ.get("GITHUB_TOKEN", "").strip()
+    pragma_api_url = os.environ.get("PRIGMA_API_URL", "http://localhost:3000").strip()
+    pragma_api_key = os.environ.get("PRIGMA_INTERNAL_API_KEY", "prigma_secret_internal_key_2026").strip()
 
     if not bot_token:
         logging.error("TELEGRAM_BOT_TOKEN is not defined in .env or environment!")
@@ -66,7 +69,7 @@ def get_config():
     except ValueError:
         interval = DEFAULT_CHECK_INTERVAL_SECONDS
 
-    return bot_token, chat_id, github_token, interval
+    return bot_token, chat_id, github_token, interval, pragma_api_url, pragma_api_key
 
 
 def load_watched_repos():
@@ -263,7 +266,7 @@ def check_all_repos(bot_token, chat_id, github_token="", notify_if_current=False
             )
 
 
-def handle_telegram_command(bot_token, chat_id, text, github_token=""):
+def handle_telegram_command(bot_token, chat_id, text, github_token="", tasks_watcher: PrigmaTasksWatcher = None):
     """Handle interactive user commands in Telegram."""
     text = text.strip()
     parts = text.split()
@@ -275,16 +278,70 @@ def handle_telegram_command(bot_token, chat_id, text, github_token=""):
 
     if cmd in ["/start", "/help"]:
         help_msg = (
-            "🤖 <b>Telegram Repo Watcher - Panel de Control</b>\n\n"
-            "Comandos disponibles para gestionar tus alertas de GitHub:\n\n"
+            "🤖 <b>PRIGMA Bot - Panel de Control</b>\n\n"
+            "<b>📦 Repositorios GitHub:</b>\n"
             "📋 <code>/list</code> - Ver repositorios monitoreados y su estado\n"
             "➕ <code>/add owner/repo</code> - Agregar un repositorio (ej: <code>/add n8n-io/n8n</code>)\n"
             "⏸️ <code>/disable owner/repo</code> - Pausar notificaciones de un repo\n"
             "▶️ <code>/enable owner/repo</code> - Reactivar notificaciones de un repo\n"
             "❌ <code>/remove owner/repo</code> - Eliminar un repo de la lista\n"
-            "🔄 <code>/check</code> - Forzar verificación manual de todos los repos\n"
+            "🔄 <code>/check</code> - Forzar verificación manual de repos\n\n"
+            "<b>📋 Tareas PRIGMA:</b>\n"
+            "🎯 <code>/tasks</code> - Ver mis tareas pendientes con botones interactivos\n"
+            "👥 <code>/tasks_all</code> - Resumen general de tareas del equipo\n"
+            "🔔 <code>/check_tasks</code> - Forzar envío de recordatorios de tareas"
         )
         send_telegram(bot_token, chat_id, help_msg)
+
+    elif cmd in ["/tasks", "/mis_tareas"]:
+        if not tasks_watcher:
+            send_telegram(bot_token, chat_id, "⚠️ El servicio de tareas no está disponible.")
+            return
+
+        tasks = tasks_watcher.fetch_pending_tasks()
+        # Filtrar tareas del usuario por su chat_id
+        user_tasks = [
+            t for t in tasks
+            if str((t.get("assignee_contact") or {}).get("telegram_chat_id")) == str(chat_id)
+        ]
+
+        if not user_tasks:
+            send_telegram(bot_token, chat_id, "🎉 <b>¡Excelente trabajo!</b> No tienes tareas pendientes asignadas en este momento.")
+            return
+
+        send_telegram(bot_token, chat_id, f"📋 <b>Tienes {len(user_tasks)} tarea(s) activa(s):</b>")
+        for t in user_tasks:
+            msg = tasks_watcher.format_task_message(t)
+            kb = tasks_watcher.generate_task_keyboard(str(t.get("id")))
+            tasks_watcher.send_telegram_message(chat_id, msg, reply_markup=kb)
+
+    elif cmd in ["/tasks_all", "/equipo"]:
+        if not tasks_watcher:
+            send_telegram(bot_token, chat_id, "⚠️ El servicio de tareas no está disponible.")
+            return
+
+        tasks = tasks_watcher.fetch_pending_tasks()
+        if not tasks:
+            send_telegram(bot_token, chat_id, "✅ No hay tareas pendientes en el equipo.")
+            return
+
+        lines = [f"📊 <b>Resumen General de Tareas ({len(tasks)} activas):</b>\n"]
+        for t in tasks:
+            assignee = t.get("assignee_name", "Sin asignar")
+            code = t.get("task_code", "")
+            title = t.get("title", "")
+            status = t.get("status", "pending")
+            lines.append(f"• <b>[{code}]</b> {title}\n  👤 <i>{assignee}</i> | Estado: <code>{status}</code>")
+
+        send_telegram(bot_token, chat_id, "\n\n".join(lines))
+
+    elif cmd == "/check_tasks":
+        if not tasks_watcher:
+            send_telegram(bot_token, chat_id, "⚠️ El servicio de tareas no está disponible.")
+            return
+        send_telegram(bot_token, chat_id, "🔄 <b>Verificando tareas pendientes y enviando recordatorios...</b>")
+        sent = tasks_watcher.check_and_notify_tasks(force=True)
+        send_telegram(bot_token, chat_id, f"✅ Verificación finalizada. Se enviaron <b>{sent}</b> recordatorio(s).")
 
     elif cmd == "/list":
         if not repos:
@@ -397,13 +454,22 @@ def poll_telegram_updates(bot_token, chat_id, last_update_id):
 
 def run_daemon():
     """Main daemon loop."""
-    bot_token, chat_id, github_token, check_interval = get_config()
-    logging.info(f"Starting Telegram Repo Watcher Daemon (Interval: {check_interval}s / {check_interval//3600}h)...")
+    bot_token, chat_id, github_token, check_interval, pragma_api_url, pragma_api_key = get_config()
+    logging.info(f"Starting Telegram Repo & Tasks Watcher Daemon (Interval: {check_interval}s / {check_interval//3600}h)...")
     last_update_id = 0
     last_check_time = time.time()
+    last_task_check_time = 0
+
+    tasks_watcher = PrigmaTasksWatcher(
+        bot_token=bot_token,
+        pragma_api_url=pragma_api_url,
+        api_key=pragma_api_key,
+        check_interval=check_interval,
+    )
 
     # Initial check on startup
     check_all_repos(bot_token, chat_id, github_token, notify_if_current=False)
+    tasks_watcher.check_and_notify_tasks(force=False)
 
     while True:
         try:
@@ -413,11 +479,24 @@ def run_daemon():
                 check_all_repos(bot_token, chat_id, github_token, notify_if_current=False)
                 last_check_time = time.time()
 
-            # 2. Process incoming Telegram messages
+            # 2. Periodic task reminder checks
+            if time.time() - last_task_check_time >= check_interval:
+                logging.info("Running scheduled check for PRIGMA tasks...")
+                tasks_watcher.check_and_notify_tasks(force=False)
+                last_task_check_time = time.time()
+
+            # 3. Process incoming Telegram messages and button callbacks
             updates = poll_telegram_updates(bot_token, chat_id, last_update_id)
             target_chats = [c.strip() for c in str(chat_id).split(",") if c.strip()]
             for upd in updates:
                 last_update_id = upd["update_id"]
+
+                # Handle callback query (interactive buttons)
+                if "callback_query" in upd:
+                    tasks_watcher.handle_callback_query(upd["callback_query"])
+                    continue
+
+                # Handle text message
                 msg = upd.get("message", {})
                 from_id = str(msg.get("from", {}).get("id", ""))
                 chat_id_msg = str(msg.get("chat", {}).get("id", from_id))
@@ -425,7 +504,7 @@ def run_daemon():
 
                 if text and (not target_chats or chat_id_msg in target_chats or from_id in target_chats):
                     logging.info(f"Received command: {text} from {from_id} in {chat_id_msg}")
-                    handle_telegram_command(bot_token, chat_id_msg, text, github_token)
+                    handle_telegram_command(bot_token, chat_id_msg, text, github_token, tasks_watcher=tasks_watcher)
 
         except KeyboardInterrupt:
             logging.info("Stopping bot daemon...")
@@ -439,8 +518,12 @@ if __name__ == "__main__":
     if "--daemon" in sys.argv or "-d" in sys.argv:
         run_daemon()
     elif "--check" in sys.argv or "-c" in sys.argv:
-        token, cid, gtoken, _ = get_config()
+        token, cid, gtoken, _, _, _ = get_config()
         check_all_repos(token, cid, gtoken, notify_if_current=True)
+    elif "--check-tasks" in sys.argv or "-t" in sys.argv:
+        token, cid, gtoken, interval, purl, pkey = get_config()
+        tw = PrigmaTasksWatcher(token, purl, pkey)
+        tw.check_and_notify_tasks(force=True)
     else:
-        token, cid, gtoken, _ = get_config()
+        token, cid, gtoken, _, _, _ = get_config()
         check_all_repos(token, cid, gtoken, notify_if_current=False)
